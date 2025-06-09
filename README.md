@@ -25,8 +25,8 @@
 ## 预览
 
 ![设置界面](https://github.com/D2073620106/fileClassifier/blob/v1.0.0/preview/1.png?raw=true)
-![系统托盘界面](https://github.com/D2073620106/fileClassifier/blob/v1.0.0/preview/2.png?raw=true)
 ![规则设置界面](https://github.com/D2073620106/fileClassifier/blob/v1.0.0/preview/3.png?raw=true)
+![系统托盘界面](https://github.com/D2073620106/fileClassifier/blob/v1.0.0/preview/2.png?raw=true)
 
 ## 安装要求
 
