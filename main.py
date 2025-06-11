@@ -11,6 +11,7 @@ from config_manager import ConfigManager
 from settings_dialog import SettingsDialog, RuleSettingsDialog
 from notification_handler import NotificationHandler
 from logger import logger  # 导入日志模块
+from monitoring_manager import MonitoringManager  # 导入监听管理器
 
 # 导入软件名称常量
 from constants import APP_NAME
@@ -43,17 +44,16 @@ class FileClassifierApp(QObject):
         self.setup_tray_icon()
         logger.info("系统托盘图标初始化完成")
         
-        # 初始化文件监视器
-        self.file_watcher = None
-        self.watcher_thread = None
-        self.setup_file_watcher()
-        logger.info("文件监视器初始化完成")
-        
-        # 连接信号
-        self.file_classified_signal.connect(self.on_file_classified)
+        # 初始化监听管理器
+        self.monitoring_manager = MonitoringManager(self.config_manager)
+        # 连接监听状态变化信号
+        self.monitoring_manager.monitoring_status_changed.connect(self.on_monitoring_status_changed)
+        # 连接文件分类信号
+        self.monitoring_manager.file_classified_signal.connect(self.on_file_classified)
+        logger.info("监听管理器初始化完成")
         
         # 恢复上次的监听状态
-        self.restore_monitoring_state()
+        self.monitoring_manager.restore_monitoring_state()
         logger.info("应用程序初始化完成")
     
     def check_and_sync_auto_start(self):
@@ -150,7 +150,6 @@ class FileClassifierApp(QObject):
         """更新分类文件夹菜单项"""
         config = self.config_manager.get_config()
         rules = config.get('rules', [])
-        print(f"规则: {rules}")
         default_target_folder = config.get('default_target_folder', '')
         
         # 移除旧的分类文件夹菜单项
@@ -279,74 +278,30 @@ class FileClassifierApp(QObject):
             print(f"打开文件夹失败: {str(e)}")
             QMessageBox.warning(None, f'{APP_NAME} - 警告', f'打开文件夹失败: {str(e)}')
     
-    def setup_file_watcher(self):
-        # 获取最新的配置
-        logger.info("设置文件监视器")
-        config = self.config_manager.get_config()
-        source_folder = config.get('source_folder', '')
-        is_monitoring = config.get('is_monitoring', False)
-        
-        logger.debug(f"源文件夹: {source_folder}, 监听状态: {is_monitoring}")
-        
-        # 如果已经有监视器在运行，先停止它
-        if self.file_watcher and self.watcher_thread and self.watcher_thread.isRunning():
-            logger.info("停止现有的文件监视器")
-            self.file_watcher.stop()
-            self.watcher_thread.quit()
-            self.watcher_thread.wait()
-        
-        # 创建新的文件监视器
-        self.file_watcher = FileWatcher(self.config_manager)
-        self.file_watcher.file_classified.connect(self.file_classified_signal)
-        logger.debug("创建新的文件监视器实例")
-        
-        # 创建线程并移动监视器到线程中
-        self.watcher_thread = QThread()
-        self.file_watcher.moveToThread(self.watcher_thread)
-        self.watcher_thread.started.connect(self.file_watcher.start_monitoring)
-        logger.debug("创建监视器线程并设置连接")
-        
-        # 如果配置中设置了自动开始监听，且源文件夹有效，则启动监视器
-        if is_monitoring and source_folder and os.path.isdir(source_folder):
-            logger.info(f"启动文件监视器线程，监听文件夹: {source_folder}")
-            self.watcher_thread.start()
-        else:
-            if not source_folder:
-                logger.warning("未设置源文件夹，无法启动监视器")
-            elif not os.path.isdir(source_folder):
-                logger.warning(f"源文件夹不存在: {source_folder}，无法启动监视器")
-            elif not is_monitoring:
-                logger.debug("监听状态为关闭，不启动监视器")
-    
     def toggle_monitoring(self):
-        logger.info("切换监听状态")
+        """切换监听状态"""
+        # 使用监听管理器切换监听状态
+        self.monitoring_manager.toggle_monitoring()
+    
+    def on_monitoring_status_changed(self, is_monitoring):
+        """监听状态变化的处理函数
+        
+        Args:
+            is_monitoring: 是否正在监听
+        """
         config = self.config_manager.get_config()
-        source_folder = config.get('source_folder', '')
         
-        # 检查是否设置了源文件夹
-        if not source_folder or not os.path.isdir(source_folder):
-            logger.warning("未设置有效的源文件夹，无法切换监听状态")
-            QMessageBox.warning(None, f'{APP_NAME} - 警告', '请先设置要监听的源文件夹！')
-            self.open_folder_settings()
-            return
-        
-        # 切换监听状态
-        is_monitoring = config.get('is_monitoring', False)
+        # 更新菜单状态
         if is_monitoring:
-            logger.info("关闭监听")
-            # 停止监听
-            if self.file_watcher and self.watcher_thread and self.watcher_thread.isRunning():
-                logger.debug("停止文件监视器线程")
-                self.file_watcher.stop()
-                self.watcher_thread.quit()
-                self.watcher_thread.wait()
+            self.toggle_monitoring_action.setText('关闭监听')
+            self.tray_icon.setToolTip(f'{APP_NAME} (监听中)')
             
-            # 更新配置
-            config['is_monitoring'] = False
-            self.config_manager.save_config(config)
-            logger.debug("更新配置：监听状态设为关闭")
-            
-            # 更新菜单状态
+            # 显示通知
+            if config.get('show_notifications', True):
+                source_folder = config.get('source_folder', '')
+                self.tray_icon.showMessage(APP_NAME, f'开始监听文件夹: {source_folder}', QSystemTrayIcon.Information, 2000)
+                logger.debug(f"显示通知：开始监听文件夹 {source_folder}")
+        else:
             self.toggle_monitoring_action.setText('开启监听')
             self.tray_icon.setToolTip(f'{APP_NAME} (监听已停止)')
             
@@ -354,67 +309,6 @@ class FileClassifierApp(QObject):
             if config.get('show_notifications', True):
                 self.tray_icon.showMessage(APP_NAME, '文件监听已停止', QSystemTrayIcon.Information, 2000)
                 logger.debug("显示通知：文件监听已停止")
-        else:
-            logger.info(f"开启监听，源文件夹: {source_folder}")
-            # 开始监听
-            config['is_monitoring'] = True
-            self.config_manager.save_config(config)
-            logger.debug("更新配置：监听状态设为开启")
-            
-            # 重新设置文件监视器
-            self.setup_file_watcher()
-            self.watcher_thread.start()
-            logger.debug("启动文件监视器线程")
-            
-            # 更新菜单状态
-            self.toggle_monitoring_action.setText('关闭监听')
-            self.tray_icon.setToolTip(f'{APP_NAME} (监听中)')
-            
-            # 显示通知
-            if config.get('show_notifications', True):
-                self.tray_icon.showMessage(APP_NAME, f'开始监听文件夹: {source_folder}', QSystemTrayIcon.Information, 2000)
-                logger.debug(f"显示通知：开始监听文件夹 {source_folder}")
-        
-        # 更新菜单状态
-        self.update_menu_state()
-    
-    def restore_monitoring_state(self):
-        """恢复上次的监听状态"""
-        logger.info("恢复上次的监听状态")
-        config = self.config_manager.get_config()
-        is_monitoring = config.get('is_monitoring', False)
-        source_folder = config.get('source_folder', '')
-        default_target_folder = config.get('default_target_folder', '')
-        
-        logger.debug(f"配置信息 - 监听状态: {is_monitoring}, 源文件夹: {source_folder}, 默认目标文件夹: {default_target_folder}")
-        
-        # 检查是否设置了源文件夹
-        if not source_folder or not os.path.isdir(source_folder):
-            logger.warning("未设置有效的源文件夹，无法恢复监听状态")
-            return
-        
-        # 更新分类文件夹菜单项，确保使用最新的 default_target_folder 设置
-        self.update_category_folders()
-        logger.debug("更新分类文件夹菜单项")
-        
-        # 如果上次是开启监听状态，则启动监视器
-        if is_monitoring:
-            logger.info(f"恢复监听状态：开启监听文件夹 {source_folder}")
-            # 重新设置文件监视器，确保使用最新的配置
-            self.setup_file_watcher()
-            # 启动监视器线程
-            if self.watcher_thread and not self.watcher_thread.isRunning():
-                logger.debug("启动监视器线程")
-                self.watcher_thread.start()
-            
-            # 更新菜单状态
-            self.toggle_monitoring_action.setText('关闭监听')
-            self.tray_icon.setToolTip(f'{APP_NAME} (监听中)')
-        else:
-            logger.info("恢复监听状态：保持停止监听")
-            # 更新菜单状态
-            self.toggle_monitoring_action.setText('开启监听')
-            self.tray_icon.setToolTip(f'{APP_NAME} (监听已停止)')
         
         # 更新菜单状态
         self.update_menu_state()
@@ -434,10 +328,17 @@ class FileClassifierApp(QObject):
         self.update_category_folders()
     
     def open_folder_settings(self):
-        dialog = SettingsDialog(self.config_manager)
+        dialog = SettingsDialog(self.config_manager, self.monitoring_manager)
         if dialog.exec_():
+            # 获取最新配置
+            config = self.config_manager.get_config()
+            is_monitoring = config.get('is_monitoring', False)
+            
             # 如果设置已更改，重新设置文件监视器
-            self.setup_file_watcher()
+            # 使用 silent 参数调用 setup_file_watcher 方法，避免触发通知
+            self.monitoring_manager.setup_file_watcher()
+            
+            # 更新菜单状态，但不触发通知
             self.update_menu_state()
     
     def open_rule_settings(self):
@@ -455,7 +356,7 @@ class FileClassifierApp(QObject):
             
             self.tray_icon.showMessage(
                 f'{APP_NAME} - 文件已分类',
-                f'文件 {file_name} 已移动到 {target_folder}',
+                f'文件 {file_name} 已被移动到目标目录',
                 QSystemTrayIcon.Information,
                 2000
             )
@@ -465,27 +366,25 @@ class FileClassifierApp(QObject):
         self.notification_handler.open_folder_and_select_file()
     
     def on_tray_icon_activated(self, reason):
-        # 当用户点击托盘图标时打开规则设置面板
+        # 当用户点击托盘图标时打开设置文件夹面板
         # QSystemTrayIcon.Trigger表示单击，QSystemTrayIcon.DoubleClick表示双击
         from PyQt5.QtWidgets import QSystemTrayIcon
         if reason == QSystemTrayIcon.Trigger or reason == QSystemTrayIcon.DoubleClick:
-            self.open_rule_settings()
+            self.open_folder_settings()
     
     def exit_app(self):
         # 停止文件监视器
-        if self.file_watcher and self.watcher_thread and self.watcher_thread.isRunning():
-            self.file_watcher.stop()
-            self.watcher_thread.quit()
-            self.watcher_thread.wait()
+        self.monitoring_manager.stop_monitoring()
         
         # 退出应用
         self.tray_icon.hide()
         self.app.quit()
-    
-    def run(self):
-        # 运行应用程序
-        return self.app.exec_()
+
+
+def main():
+    app = FileClassifierApp()
+    sys.exit(app.app.exec_())
+
 
 if __name__ == '__main__':
-    app = FileClassifierApp()
-    sys.exit(app.run())
+    main()

@@ -1,19 +1,39 @@
 import os
 import json
+import platform
 from logger import logger  # 导入日志模块
 
 class ConfigManager:
     def __init__(self, config_file='config.json'):
-        # 使用绝对路径来指定配置文件位置
-        # 如果传入的是相对路径，则转换为绝对路径
-        if not os.path.isabs(config_file):
-            # 获取应用程序所在目录
-            app_dir = os.path.dirname(os.path.abspath(__file__))
-            # 拼接绝对路径
-            self.config_file = os.path.join(app_dir, config_file)
-        else:
-            self.config_file = config_file
+        # 确定配置文件的绝对路径
+        # 根据操作系统确定配置文件的存储位置
+        system = platform.system()
+        
+        if system == 'Windows':
+            # Windows: %LOCALAPPDATA%\FileClassifier
+            app_data_dir = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'FileClassifier')
+        elif system == 'Darwin':  # macOS
+            # macOS: ~/.config/FileClassifier
+            app_data_dir = os.path.join(os.path.expanduser('~'), '.config', 'FileClassifier')
+        else:  # Linux 和其他系统
+            # Linux: ~/.config/FileClassifier
+            app_data_dir = os.path.join(os.path.expanduser('~'), '.config', 'FileClassifier')
+        
+        # 确保配置目录存在
+        try:
+            os.makedirs(app_data_dir, exist_ok=True)
+            logger.debug(f"确保配置目录存在: {app_data_dir}")
+        except Exception as e:
+            logger.error(f"创建配置目录失败: {str(e)}")
+            # 如果创建目录失败，回退到应用程序目录
+            app_data_dir = os.path.dirname(os.path.abspath(__file__))
+            logger.warning(f"回退到应用程序目录: {app_data_dir}")
+        
+        # 设置配置文件的完整路径
+        self.config_file = os.path.join(app_data_dir, config_file)
         logger.debug(f"配置文件路径: {self.config_file}")
+        
+        # 加载配置
         self.config = self.load_config()
         logger.info("配置管理器初始化完成")
     
